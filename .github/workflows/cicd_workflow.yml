@@ -39,6 +39,7 @@ jobs:
           fail-on-error: true
 
       - name: Build and push the image
+
         run: |
           docker login --username tno52 --password ${{ secrets.ACCESS_TOKEN }} ghcr.io
           docker build -t ghcr.io/tno52/prime-service:latest --file Dockerfile .
