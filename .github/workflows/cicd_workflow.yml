@@ -1,18 +1,37 @@
-name: Run the tests, build the image
+name: Test, Create Image, Publish to Azure
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  checks: write
 
 jobs:
   build_and_publish:
     runs-on: ubuntu-latest
+
+    services:
+      postgres_db:
+        image: postgres
+        env:
+          POSTGRES_USER: admin2024
+          POSTGRES_PASSWORD: p4662024!
+          POSTGRES_DB: primes
+        ports:
+          - 5001:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      VERSION: ${{ secrets.SERVICE_VERSION }}
+      CONTAINER_REGISTRY: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
+      CONTAINER_REGISTRY_UN: ${{ secrets.CONTAINER_REGISTRY_UN }}
+      CONTAINER_REGISTRY_PW: ${{ secrets.CONTAINER_REGISTRY_PW }}
+      ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+      DATASOURCE_URL: ${{ secrets.SPRING_DATASOURCE_URL }}
+      DATASOURCE_UN: ${{ secrets.SPRING_DATASOURCE_UN }}
+      DATASOURCE_PW: ${{ secrets.SPRING_DATASOURCE_PW }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v1
@@ -24,12 +43,17 @@ jobs:
           distribution: 'adopt'
 
       - name: Build the package
-        run: mvn --batch-mode -DskipTests package
+        run: ./mvnw --batch-mode -DskipTests clean package
 
       - name: Run the unit tests
-        run: mvn --batch-mode -Dmaven.test.failure.ignore=true test
+        run: |
+          ./mvnw --batch-mode -Dmaven.test.failure.ignore=true test
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5001/primes
+          SPRING_DATASOURCE_USERNAME: admin2024
+          SPRING_DATASOURCE_PASSWORD: p4662024!
 
-      - name: Report
+      - name: Report the result of the unit tests
         uses: dorny/test-reporter@v1
         if: always()
         with:
@@ -38,9 +62,23 @@ jobs:
           reporter: java-junit
           fail-on-error: true
 
-      - name: Build and push the image
+      # Build the Docker image
+      - name: Build the docker image
+        run: ./scripts/build-image.sh
 
-        run: |
-          docker login --username tno52 --password ${{ secrets.ACCESS_TOKEN }} ghcr.io
-          docker build -t ghcr.io/tno52/prime-service:latest --file Dockerfile .
-          docker push ghcr.io/tno52/prime-service:latest
+      # Publish the Docker image to GitHub Container Registry
+      - name: Publish to Github container registry
+        run: ./scripts/push-to-ghcr.sh
+
+      # Publish the Docker image to Azure Container Registry
+      - name: Publish to Azure container registry
+        run: ./scripts/push-to-acr.sh
+
+      # Install Kubectl and connect it to the cluster
+      - uses: tale/kubectl-action@v1
+        with:
+          base64-kube-config: ${{ secrets.KUBE_CONFIG }}
+
+      # Deploy the service to the Azure cluster
+      - name: Deploy
+        run: ./scripts/deploy.sh
